@@ -7,7 +7,7 @@ from datetime import datetime
 
 # Fetch the last month of 5-minute interval data for Gold futures
 bitcoin = yf.Ticker("BTC-USD")
-df = bitcoin.history(period="1mo", interval="5m")
+df = bitcoin.history(period="5d", interval="5m")
 
 # Fetch the S&P 500 data for the same period
 sp500 = yf.Ticker("^GSPC")
@@ -22,11 +22,8 @@ ema_long_length = 45
 
 # Trade configuration
 threshold = 0.07
-# stop_loss_percent = 1.5 * 1.5
-# take_profit_percent = 3.75 * 1.5
-
-stop_loss_percent = .4
-take_profit_percent = .5
+stop_loss_percent = 0.2
+take_profit_percent = 0.35
 
 # Initial capital
 initial_capital = 10000
@@ -51,6 +48,12 @@ losing_long_trades = 0
 profit_long = 0.0
 loss_long = 0.0
 
+short_trades = 0
+profitable_short_trades = 0
+losing_short_trades = 0
+profit_short = 0.0
+loss_short = 0.0
+
 # Track the number of trades happening at once and percentage of portfolio in each trade
 trades_happening_at_once = []
 percent_in_trade = []
@@ -65,35 +68,43 @@ portfolio_values = []
 # Function to handle stop loss and take profit
 def check_trade_conditions(trade, row):
     global profit_loss, profitable_trades, losing_trades, trade_durations
-    global profitable_long_trades, losing_long_trades
-    global profit_long, loss_long, current_capital, open_trades_count
+    global profitable_long_trades, losing_long_trades, profitable_short_trades, losing_short_trades
+    global profit_long, loss_long, profit_short, loss_short, current_capital, open_trades_count
 
-    stop_loss = trade['entry_price'] * (1 - stop_loss_percent / 100)
-    take_profit = trade['entry_price'] * (1 + take_profit_percent / 100)
+    stop_loss = trade['entry_price'] * (1 - stop_loss_percent / 100) if trade['is_long'] else trade['entry_price'] * (1 + stop_loss_percent / 100)
+    take_profit = trade['entry_price'] * (1 + take_profit_percent / 100) if trade['is_long'] else trade['entry_price'] * (1 - take_profit_percent / 100)
 
-    if row['Close'] <= stop_loss:
-        loss = trade['amount'] * (trade['entry_price'] - stop_loss) / trade['entry_price']
+    if (trade['is_long'] and row['Close'] <= stop_loss) or (not trade['is_long'] and row['Close'] >= stop_loss):
+        loss = trade['amount'] * abs(trade['entry_price'] - stop_loss) / trade['entry_price']
         profit_loss -= loss
-        loss_long += loss
+        if trade['is_long']:
+            loss_long += loss
+            losing_long_trades += 1
+        else:
+            loss_short += loss
+            losing_short_trades += 1
         current_capital -= loss
         trade['status'] = 'closed'
         trade['exit_price'] = stop_loss
         trade['exit_time'] = row.name
         trade_durations.append((row.name - trade['entry_time']).total_seconds() / 60)
         losing_trades += 1
-        losing_long_trades += 1
         open_trades_count -= 1  # Decrease open trades count
-    elif row['Close'] >= take_profit:
-        profit = trade['amount'] * (take_profit - trade['entry_price']) / trade['entry_price']
+    elif (trade['is_long'] and row['Close'] >= take_profit) or (not trade['is_long'] and row['Close'] <= take_profit):
+        profit = trade['amount'] * abs(take_profit - trade['entry_price']) / trade['entry_price']
         profit_loss += profit
-        profit_long += profit
+        if trade['is_long']:
+            profit_long += profit
+            profitable_long_trades += 1
+        else:
+            profit_short += profit
+            profitable_short_trades += 1
         current_capital += profit
         trade['status'] = 'closed'
         trade['exit_price'] = take_profit
         trade['exit_time'] = row.name
         trade_durations.append((row.name - trade['entry_time']).total_seconds() / 60)
         profitable_trades += 1
-        profitable_long_trades += 1
         open_trades_count -= 1  # Decrease open trades count
 
 # Iterate through the dataframe to check for trade conditions
@@ -118,6 +129,23 @@ for index, row in df.iterrows():
                 })
                 trade_count += 1
                 long_trades += 1
+                open_trades_count += 1  # Increase open trades count
+        elif row['EMA_Short'] < row['EMA_Long']:
+            price_change_rise = (row['Close'] - price_30_min_earlier) / price_30_min_earlier * 100
+            if price_change_rise >= threshold:
+                # Calculate the amount to invest based on available capital
+                amount_to_invest = current_capital / (open_trades_count + 1)  # Ensuring equal distribution of capital
+                trade_percent = (amount_to_invest / current_capital) * 100
+                percent_in_trade.append(trade_percent)
+                trades.append({
+                    'entry_price': row['Close'],
+                    'entry_time': row.name,
+                    'amount': amount_to_invest,
+                    'is_long': False,
+                    'status': 'open'
+                })
+                trade_count += 1
+                short_trades += 1
                 open_trades_count += 1  # Increase open trades count
 
     # Update the status of each trade
@@ -155,6 +183,7 @@ high_total_percent_in_trade = np.max(total_percent_in_trade) if total_percent_in
 
 # Calculate buy and hold strategy for gold
 buy_and_hold_value = df['Close'] / df['Close'].iloc[0] * initial_capital
+buy_and_hold_roi = ((buy_and_hold_value[-1] - initial_capital) / initial_capital) * 100
 
 # Print summary results
 print("\nSummary Results:")
@@ -172,10 +201,18 @@ print(f"Profit from Long Trades: {profit_long}")
 print(f"Loss from Long Trades: {loss_long}")
 print(f"Average Profit from Long Trades: {profit_long/profitable_long_trades if profitable_long_trades else 0}")
 print(f"Average Loss from Long Trades: {loss_long/losing_long_trades if losing_long_trades else 0}")
+print(f"Short Trades: {short_trades}")
+print(f"Profitable Short Trades: {profitable_short_trades}")
+print(f"Losing Short Trades: {losing_short_trades}")
+print(f"Profit from Short Trades: {profit_short}")
+print(f"Loss from Short Trades: {loss_short}")
+print(f"Average Profit from Short Trades: {profit_short/profitable_short_trades if profitable_short_trades else 0}")
+print(f"Average Loss from Short Trades: {loss_short/losing_short_trades if losing_short_trades else 0}")
 print(f"Initial Capital: ${initial_capital}")
 print(f"Ending Capital: ${current_capital}")
 print(f"Net Profit/Loss: ${current_capital - initial_capital}")
 print(f"Return on Investment (ROI): {((current_capital - initial_capital) / initial_capital) * 100:.2f}%")
+print(f"Buy and Hold ROI: {buy_and_hold_roi:.2f}%")
 print(f"Average Trades at Once: {average_trades_at_once:.2f}")
 print(f"Low Trades at Once: {low_trades_at_once}")
 print(f"High Trades at Once: {high_trades_at_once}")
@@ -251,14 +288,19 @@ summary_lines = [
     f"Profitable Trades: {profitable_trades}",
     f"Losing Trades: {losing_trades}",
     f"Average Trade Duration: {average_trade_duration} minutes",
-    f"Profit from Trades: {profit_long}",
-    f"Loss from Trades: {loss_long}",
-    f"Average Profit from Trades: {profit_long/profitable_long_trades if profitable_long_trades else 0}",
-    f"Average Loss from Trades: {loss_long/losing_long_trades if losing_long_trades else 0}",
+    f"Profit from Long Trades: {profit_long}",
+    f"Loss from Long Trades: {loss_long}",
+    f"Average Profit from Long Trades: {profit_long/profitable_long_trades if profitable_long_trades else 0}",
+    f"Average Loss from Long Trades: {loss_long/losing_long_trades if losing_long_trades else 0}",
+    f"Profit from Short Trades: {profit_short}",
+    f"Loss from Short Trades: {loss_short}",
+    f"Average Profit from Short Trades: {profit_short/profitable_short_trades if profitable_short_trades else 0}",
+    f"Average Loss from Short Trades: {loss_short/losing_short_trades if losing_short_trades else 0}",
     f"Initial Capital: ${initial_capital}",
     f"Ending Capital: ${current_capital}",
     f"Net Profit/Loss: ${current_capital - initial_capital}",
     f"Return on Investment (ROI): {((current_capital - initial_capital) / initial_capital) * 100:.2f}%",
+    f"Buy and Hold ROI: {buy_and_hold_roi:.2f}%",
     f"Average Trades at Once: {average_trades_at_once:.2f}",
     f"Low Trades at Once: {low_trades_at_once}",
     f"High Trades at Once: {high_trades_at_once}",

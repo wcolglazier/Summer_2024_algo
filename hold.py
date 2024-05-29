@@ -6,7 +6,7 @@ from fpdf import FPDF
 from datetime import datetime
 
 # Fetch the last month of 5-minute interval data for Gold futures
-bitcoin = yf.Ticker("BTC-USD")
+bitcoin = yf.Ticker("GC=F")
 df = bitcoin.history(period="1mo", interval="5m")
 
 # Fetch the S&P 500 data for the same period
@@ -22,11 +22,8 @@ ema_long_length = 45
 
 # Trade configuration
 threshold = 0.07
-# stop_loss_percent = 1.5 * 1.5
-# take_profit_percent = 3.75 * 1.5
-
-stop_loss_percent = .4
-take_profit_percent = .5
+stop_loss_percent = 0.2
+take_profit_percent = 0.35
 
 # Initial capital
 initial_capital = 10000
@@ -155,6 +152,7 @@ high_total_percent_in_trade = np.max(total_percent_in_trade) if total_percent_in
 
 # Calculate buy and hold strategy for gold
 buy_and_hold_value = df['Close'] / df['Close'].iloc[0] * initial_capital
+buy_and_hold_roi = ((buy_and_hold_value[-1] - initial_capital) / initial_capital) * 100
 
 # Print summary results
 print("\nSummary Results:")
@@ -176,6 +174,7 @@ print(f"Initial Capital: ${initial_capital}")
 print(f"Ending Capital: ${current_capital}")
 print(f"Net Profit/Loss: ${current_capital - initial_capital}")
 print(f"Return on Investment (ROI): {((current_capital - initial_capital) / initial_capital) * 100:.2f}%")
+print(f"Buy and Hold ROI: {buy_and_hold_roi:.2f}%")
 print(f"Average Trades at Once: {average_trades_at_once:.2f}")
 print(f"Low Trades at Once: {low_trades_at_once}")
 print(f"High Trades at Once: {high_trades_at_once}")
@@ -259,6 +258,7 @@ summary_lines = [
     f"Ending Capital: ${current_capital}",
     f"Net Profit/Loss: ${current_capital - initial_capital}",
     f"Return on Investment (ROI): {((current_capital - initial_capital) / initial_capital) * 100:.2f}%",
+    f"Buy and Hold ROI: {buy_and_hold_roi:.2f}%",
     f"Average Trades at Once: {average_trades_at_once:.2f}",
     f"Low Trades at Once: {low_trades_at_once}",
     f"High Trades at Once: {high_trades_at_once}",
