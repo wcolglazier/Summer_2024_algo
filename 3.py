@@ -1,20 +1,48 @@
-import yfinance as yf
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 from fpdf import FPDF
 from datetime import datetime
+from alpha_vantage.timeseries import TimeSeries
+
+# Replace 'your_alpha_vantage_api_key' with your actual Alpha Vantage API key
+api_key = 'ZXF37CQ2GKLEPKKZ'
+ts = TimeSeries(key=api_key, output_format='pandas')
+
+def fetch_data(symbol, interval, outputsize='full'):
+    try:
+        data, meta = ts.get_intraday(symbol=symbol, interval=interval, outputsize=outputsize)
+        data = data.rename(columns={
+            '1. open': 'Open',
+            '2. high': 'High',
+            '3. low': 'Low',
+            '4. close': 'Close',
+            '5. volume': 'Volume'
+        })
+        data.index = pd.to_datetime(data.index)
+        return data
+    except ValueError as e:
+        print(f"Error fetching data for {symbol}: {e}")
+        return pd.DataFrame()
 
 # Fetch the last month of 5-minute interval data for Gold futures
-bitcoin = yf.Ticker("BTC-USD")
-df = bitcoin.history(period="1mo", interval="5m")
+gold_data = fetch_data('GLD', '5min')
+if gold_data.empty:
+    print("Failed to fetch Gold data. Exiting.")
+    exit()
+
+gold_data = gold_data[gold_data.index >= (pd.to_datetime(datetime.now()) - pd.Timedelta(days=30))]
 
 # Fetch the S&P 500 data for the same period
-sp500 = yf.Ticker("^GSPC")
-sp500_df = sp500.history(start=df.index.min(), end=df.index.max(), interval="5m")
+sp500_data = fetch_data('SPY', '5min')
+if sp500_data.empty:
+    print("Failed to fetch S&P 500 data. Exiting.")
+    exit()
+
+sp500_data = sp500_data[(sp500_data.index >= gold_data.index.min()) & (sp500_data.index <= gold_data.index.max())]
 
 # Ensure SP500 data is aligned with Gold data
-sp500_df = sp500_df.reindex(df.index, method='nearest')
+sp500_data = sp500_data.reindex(gold_data.index, method='nearest')
 
 # EMA configuration
 ema_short_length = 20
@@ -22,19 +50,16 @@ ema_long_length = 45
 
 # Trade configuration
 threshold = 0.07
-# stop_loss_percent = 1.5 * 1.5
-# take_profit_percent = 3.75 * 1.5
-
-stop_loss_percent = .4
-take_profit_percent = .5
+stop_loss_percent = 1.5
+take_profit_percent = 3.75  # Actual percentage for take profit
 
 # Initial capital
 initial_capital = 10000
 current_capital = initial_capital
 
 # Calculate EMAs
-df['EMA_Short'] = df['Close'].ewm(span=ema_short_length, adjust=False).mean()
-df['EMA_Long'] = df['Close'].ewm(span=ema_long_length, adjust=False).mean()
+gold_data['EMA_Short'] = gold_data['Close'].ewm(span=ema_short_length, adjust=False).mean()
+gold_data['EMA_Long'] = gold_data['Close'].ewm(span=ema_long_length, adjust=False).mean()
 
 # Trade tracking list
 trades = []
@@ -97,11 +122,11 @@ def check_trade_conditions(trade, row):
         open_trades_count -= 1  # Decrease open trades count
 
 # Iterate through the dataframe to check for trade conditions
-for index, row in df.iterrows():
+for index, row in gold_data.iterrows():
     # Check for new trade opportunities
     timestamp_30_min_earlier = row.name - pd.Timedelta(minutes=30)
-    if timestamp_30_min_earlier in df.index:
-        price_30_min_earlier = df.loc[timestamp_30_min_earlier]['Close']
+    if timestamp_30_min_earlier in gold_data.index:
+        price_30_min_earlier = gold_data.loc[timestamp_30_min_earlier]['Close']
         if row['EMA_Short'] > row['EMA_Long']:
             price_change_drop = (row['Close'] - price_30_min_earlier) / price_30_min_earlier * 100
             if price_change_drop <= -threshold:
@@ -154,7 +179,7 @@ low_total_percent_in_trade = np.min(total_percent_in_trade) if total_percent_in_
 high_total_percent_in_trade = np.max(total_percent_in_trade) if total_percent_in_trade else 0
 
 # Calculate buy and hold strategy for gold
-buy_and_hold_value = df['Close'] / df['Close'].iloc[0] * initial_capital
+buy_and_hold_value = gold_data['Close'] / gold_data['Close'].iloc[0] * initial_capital
 
 # Print summary results
 print("\nSummary Results:")
@@ -196,9 +221,9 @@ trades_df = pd.DataFrame(trades)
 
 # Plotting the data
 plt.figure(figsize=(14, 7))
-plt.plot(df['Close'], label='Close Price', alpha=0.5)
-plt.plot(df['EMA_Short'], label=f'EMA {ema_short_length}', alpha=0.75)
-plt.plot(df['EMA_Long'], label=f'EMA {ema_long_length}', alpha=0.75)
+plt.plot(gold_data['Close'], label='Close Price', alpha=0.5)
+plt.plot(gold_data['EMA_Short'], label=f'EMA {ema_short_length}', alpha=0.75)
+plt.plot(gold_data['EMA_Long'], label=f'EMA {ema_long_length}', alpha=0.75)
 
 # Mark trades on the plot
 for trade in trades:
@@ -217,9 +242,9 @@ plt.close()
 
 # Plot portfolio value, buy-and-hold strategy, and S&P 500 value
 plt.figure(figsize=(14, 7))
-plt.plot(df.index, portfolio_values, label='Portfolio Value', alpha=0.75)
-plt.plot(df.index, buy_and_hold_value, label='Buy & Hold Gold Value', alpha=0.75, linestyle='--')
-plt.plot(sp500_df.index, sp500_df['Close'] / sp500_df['Close'].iloc[0] * initial_capital, label='S&P 500 Value', alpha=0.75)
+plt.plot(gold_data.index, portfolio_values, label='Portfolio Value', alpha=0.75)
+plt.plot(gold_data.index, buy_and_hold_value, label='Buy & Hold Gold Value', alpha=0.75, linestyle='--')
+plt.plot(sp500_data.index, sp500_data['Close'] / sp500_data['Close'].iloc[0] * initial_capital, label='S&P 500 Value', alpha=0.75)
 plt.title('Portfolio Value vs. Buy & Hold Gold and S&P 500')
 plt.xlabel('Time')
 plt.ylabel('Value')

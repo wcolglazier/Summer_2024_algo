@@ -1,19 +1,58 @@
-import yfinance as yf
+import requests
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 from fpdf import FPDF
 from datetime import datetime
 
-# Fetch the last month of 5-minute interval data for Gold futures
-bitcoin = yf.Ticker("BTC-USD")
-df = bitcoin.history(period="1mo", interval="5m")
+# Your Finnhub API key
+api_key = 'cpdcvg9r01qu69g25g60cpdcvg9r01qu69g25g6g'
+
+# Fetch the last month of 5-minute interval data for Berkshire Hathaway Class B
+ticker = 'BRK-B'
+url = f'https://finnhub.io/api/v1/stock/candle?symbol={ticker}&resolution=5&from={(datetime.now() - pd.DateOffset(months=1)).timestamp()}&to={datetime.now().timestamp()}&token={api_key}'
+response = requests.get(url)
+data = response.json()
+
+# Check if data is valid
+if 's' not in data or data['s'] != 'ok':
+    raise ValueError("Failed to fetch data from Finnhub")
+
+# Convert to DataFrame
+df = pd.DataFrame({
+    'timestamp': data['t'],
+    'open': data['o'],
+    'high': data['h'],
+    'low': data['l'],
+    'close': data['c'],
+    'volume': data['v']
+})
+df['timestamp'] = pd.to_datetime(df['timestamp'], unit='s')
+df.set_index('timestamp', inplace=True)
 
 # Fetch the S&P 500 data for the same period
-sp500 = yf.Ticker("^GSPC")
-sp500_df = sp500.history(start=df.index.min(), end=df.index.max(), interval="5m")
+sp500_ticker = '^GSPC'
+sp500_url = f'https://finnhub.io/api/v1/stock/candle?symbol={sp500_ticker}&resolution=5&from={(datetime.now() - pd.DateOffset(months=1)).timestamp()}&to={datetime.now().timestamp()}&token={api_key}'
+sp500_response = requests.get(sp500_url)
+sp500_data = sp500_response.json()
 
-# Ensure SP500 data is aligned with Gold data
+# Check if data is valid
+if sp500_data['s'] != 'ok':
+    raise ValueError("Failed to fetch data from Finnhub")
+
+# Convert to DataFrame
+sp500_df = pd.DataFrame({
+    'timestamp': sp500_data['t'],
+    'open': sp500_data['o'],
+    'high': sp500_data['h'],
+    'low': sp500_data['l'],
+    'close': sp500_data['c'],
+    'volume': sp500_data['v']
+})
+sp500_df['timestamp'] = pd.to_datetime(sp500_df['timestamp'], unit='s')
+sp500_df.set_index('timestamp', inplace=True)
+
+# Ensure SP500 data is aligned with the stock data
 sp500_df = sp500_df.reindex(df.index, method='nearest')
 
 # EMA configuration
@@ -22,19 +61,16 @@ ema_long_length = 45
 
 # Trade configuration
 threshold = 0.07
-# stop_loss_percent = 1.5 * 1.5
-# take_profit_percent = 3.75 * 1.5
-
-stop_loss_percent = .4
-take_profit_percent = .5
+stop_loss_percent = 1.5
+take_profit_percent = 3.75  # Actual percentage for take profit
 
 # Initial capital
 initial_capital = 10000
 current_capital = initial_capital
 
 # Calculate EMAs
-df['EMA_Short'] = df['Close'].ewm(span=ema_short_length, adjust=False).mean()
-df['EMA_Long'] = df['Close'].ewm(span=ema_long_length, adjust=False).mean()
+df['EMA_Short'] = df['close'].ewm(span=ema_short_length, adjust=False).mean()
+df['EMA_Long'] = df['close'].ewm(span=ema_long_length, adjust=False).mean()
 
 # Trade tracking list
 trades = []
@@ -71,7 +107,7 @@ def check_trade_conditions(trade, row):
     stop_loss = trade['entry_price'] * (1 - stop_loss_percent / 100)
     take_profit = trade['entry_price'] * (1 + take_profit_percent / 100)
 
-    if row['Close'] <= stop_loss:
+    if row['close'] <= stop_loss:
         loss = trade['amount'] * (trade['entry_price'] - stop_loss) / trade['entry_price']
         profit_loss -= loss
         loss_long += loss
@@ -83,7 +119,7 @@ def check_trade_conditions(trade, row):
         losing_trades += 1
         losing_long_trades += 1
         open_trades_count -= 1  # Decrease open trades count
-    elif row['Close'] >= take_profit:
+    elif row['close'] >= take_profit:
         profit = trade['amount'] * (take_profit - trade['entry_price']) / trade['entry_price']
         profit_loss += profit
         profit_long += profit
@@ -101,16 +137,16 @@ for index, row in df.iterrows():
     # Check for new trade opportunities
     timestamp_30_min_earlier = row.name - pd.Timedelta(minutes=30)
     if timestamp_30_min_earlier in df.index:
-        price_30_min_earlier = df.loc[timestamp_30_min_earlier]['Close']
+        price_30_min_earlier = df.loc[timestamp_30_min_earlier]['close']
         if row['EMA_Short'] > row['EMA_Long']:
-            price_change_drop = (row['Close'] - price_30_min_earlier) / price_30_min_earlier * 100
+            price_change_drop = (row['close'] - price_30_min_earlier) / price_30_min_earlier * 100
             if price_change_drop <= -threshold:
                 # Calculate the amount to invest based on available capital
                 amount_to_invest = current_capital / (open_trades_count + 1)  # Ensuring equal distribution of capital
                 trade_percent = (amount_to_invest / current_capital) * 100
                 percent_in_trade.append(trade_percent)
                 trades.append({
-                    'entry_price': row['Close'],
+                    'entry_price': row['close'],
                     'entry_time': row.name,
                     'amount': amount_to_invest,
                     'is_long': True,
@@ -153,8 +189,8 @@ average_total_percent_in_trade = np.mean(total_percent_in_trade) if total_percen
 low_total_percent_in_trade = np.min(total_percent_in_trade) if total_percent_in_trade else 0
 high_total_percent_in_trade = np.max(total_percent_in_trade) if total_percent_in_trade else 0
 
-# Calculate buy and hold strategy for gold
-buy_and_hold_value = df['Close'] / df['Close'].iloc[0] * initial_capital
+# Calculate buy and hold strategy for the stock
+buy_and_hold_value = df['close'] / df['close'].iloc[0] * initial_capital
 
 # Print summary results
 print("\nSummary Results:")
@@ -196,7 +232,7 @@ trades_df = pd.DataFrame(trades)
 
 # Plotting the data
 plt.figure(figsize=(14, 7))
-plt.plot(df['Close'], label='Close Price', alpha=0.5)
+plt.plot(df['close'], label='Close Price', alpha=0.5)
 plt.plot(df['EMA_Short'], label=f'EMA {ema_short_length}', alpha=0.75)
 plt.plot(df['EMA_Long'], label=f'EMA {ema_long_length}', alpha=0.75)
 
@@ -207,7 +243,7 @@ for trade in trades:
         plt.plot(trade['entry_time'], trade['entry_price'], marker='o', color='b', markersize=8, alpha=0.75)
         plt.plot(trade['exit_time'], trade['exit_price'], marker='x', color=color, markersize=8, alpha=0.75)
 
-plt.title('Gold Futures Trading Strategy')
+plt.title(f'{ticker} Trading Strategy')
 plt.xlabel('Time')
 plt.ylabel('Price')
 plt.legend()
@@ -218,9 +254,9 @@ plt.close()
 # Plot portfolio value, buy-and-hold strategy, and S&P 500 value
 plt.figure(figsize=(14, 7))
 plt.plot(df.index, portfolio_values, label='Portfolio Value', alpha=0.75)
-plt.plot(df.index, buy_and_hold_value, label='Buy & Hold Gold Value', alpha=0.75, linestyle='--')
-plt.plot(sp500_df.index, sp500_df['Close'] / sp500_df['Close'].iloc[0] * initial_capital, label='S&P 500 Value', alpha=0.75)
-plt.title('Portfolio Value vs. Buy & Hold Gold and S&P 500')
+plt.plot(df.index, buy_and_hold_value, label='Buy & Hold Stock Value', alpha=0.75, linestyle='--')
+plt.plot(sp500_df.index, sp500_df['close'] / sp500_df['close'].iloc[0] * initial_capital, label='S&P 500 Value', alpha=0.75)
+plt.title('Portfolio Value vs. Buy & Hold Stock and S&P 500')
 plt.xlabel('Time')
 plt.ylabel('Value')
 plt.legend()

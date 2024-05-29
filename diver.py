@@ -5,16 +5,31 @@ import matplotlib.pyplot as plt
 from fpdf import FPDF
 from datetime import datetime
 
-# Fetch the last month of 5-minute interval data for Gold futures
-bitcoin = yf.Ticker("BTC-USD")
-df = bitcoin.history(period="1mo", interval="5m")
+# Fetch the last month of 5-minute interval data for the assets
+assets = {
+    "Gold": "GC=F",
+    "Bitcoin": "BTC-USD",
+    "QQQ": "QQQ",
+    "XLK": "XLK",
+    "Nvidia": "NVDA"
+}
+
+dfs = {}
+for asset, ticker in assets.items():
+    data = yf.Ticker(ticker)
+    dfs[asset] = data.history(period="1mo", interval="5m")
 
 # Fetch the S&P 500 data for the same period
 sp500 = yf.Ticker("^GSPC")
-sp500_df = sp500.history(start=df.index.min(), end=df.index.max(), interval="5m")
+sp500_df = sp500.history(start=dfs["Gold"].index.min(), end=dfs["Gold"].index.max(), interval="5m")
 
-# Ensure SP500 data is aligned with Gold data
-sp500_df = sp500_df.reindex(df.index, method='nearest')
+# Ensure dataframes are aligned to the same timeframe
+common_index = dfs["Gold"].index
+for asset in assets:
+    dfs[asset] = dfs[asset].reindex(common_index, method='nearest')
+
+# Ensure the S&P 500 dataframe is aligned to the same timeframe as the other assets
+sp500_df = sp500_df.reindex(common_index, method='nearest')
 
 # EMA configuration
 ema_short_length = 20
@@ -22,21 +37,15 @@ ema_long_length = 45
 
 # Trade configuration
 threshold = 0.07
-# stop_loss_percent = 1.5 * 1.5
-# take_profit_percent = 3.75 * 1.5
-
-stop_loss_percent = .4
-take_profit_percent = .5
+stop_loss_percent = 1.5 * 1.5
+take_profit_percent = 3.75 * 1.5
 
 # Initial capital
 initial_capital = 10000
+capital_per_asset = initial_capital / len(assets)
 current_capital = initial_capital
 
-# Calculate EMAs
-df['EMA_Short'] = df['Close'].ewm(span=ema_short_length, adjust=False).mean()
-df['EMA_Long'] = df['Close'].ewm(span=ema_long_length, adjust=False).mean()
-
-# Trade tracking list
+# Create empty trade list for each asset
 trades = []
 profit_loss = 0.0
 trade_count = 0
@@ -59,7 +68,7 @@ total_percent_in_trade = []
 # Initialize open trades count
 open_trades_count = 0
 
-# Portfolio value tracking
+# Portfolio value tracking for each timestamp
 portfolio_values = []
 
 # Function to handle stop loss and take profit
@@ -96,43 +105,49 @@ def check_trade_conditions(trade, row):
         profitable_long_trades += 1
         open_trades_count -= 1  # Decrease open trades count
 
-# Iterate through the dataframe to check for trade conditions
-for index, row in df.iterrows():
-    # Check for new trade opportunities
-    timestamp_30_min_earlier = row.name - pd.Timedelta(minutes=30)
-    if timestamp_30_min_earlier in df.index:
-        price_30_min_earlier = df.loc[timestamp_30_min_earlier]['Close']
-        if row['EMA_Short'] > row['EMA_Long']:
-            price_change_drop = (row['Close'] - price_30_min_earlier) / price_30_min_earlier * 100
-            if price_change_drop <= -threshold:
-                # Calculate the amount to invest based on available capital
-                amount_to_invest = current_capital / (open_trades_count + 1)  # Ensuring equal distribution of capital
-                trade_percent = (amount_to_invest / current_capital) * 100
-                percent_in_trade.append(trade_percent)
-                trades.append({
-                    'entry_price': row['Close'],
-                    'entry_time': row.name,
-                    'amount': amount_to_invest,
-                    'is_long': True,
-                    'status': 'open'
-                })
-                trade_count += 1
-                long_trades += 1
-                open_trades_count += 1  # Increase open trades count
+# Iterate through the dataframes to check for trade conditions
+for asset, df in dfs.items():
+    # Calculate EMAs
+    df['EMA_Short'] = df['Close'].ewm(span=ema_short_length, adjust=False).mean()
+    df['EMA_Long'] = df['Close'].ewm(span=ema_long_length, adjust=False).mean()
 
-    # Update the status of each trade
-    for trade in trades:
-        if trade['status'] == 'open':
-            check_trade_conditions(trade, row)
+    for index, row in df.iterrows():
+        # Check for new trade opportunities
+        timestamp_30_min_earlier = row.name - pd.Timedelta(minutes=30)
+        if timestamp_30_min_earlier in df.index:
+            price_30_min_earlier = df.loc[timestamp_30_min_earlier]['Close']
+            if row['EMA_Short'] > row['EMA_Long']:
+                price_change_drop = (row['Close'] - price_30_min_earlier) / price_30_min_earlier * 100
+                if price_change_drop <= -threshold:
+                    # Calculate the amount to invest based on available capital
+                    amount_to_invest = current_capital / (open_trades_count + 1)  # Ensuring equal distribution of capital
+                    trade_percent = (amount_to_invest / current_capital) * 100
+                    percent_in_trade.append(trade_percent)
+                    trades.append({
+                        'entry_price': row['Close'],
+                        'entry_time': row.name,
+                        'amount': amount_to_invest,
+                        'is_long': True,
+                        'status': 'open'
+                    })
+                    trade_count += 1
+                    long_trades += 1
+                    open_trades_count += 1  # Increase open trades count
 
-    # Track the number of trades happening at once
-    trades_happening_at_once.append(open_trades_count)
+        # Update the status of each trade
+        for trade in trades:
+            if trade['status'] == 'open':
+                check_trade_conditions(trade, row)
 
-    # Track total percent of portfolio in active trades
-    if open_trades_count > 0:
-        total_percent_in_trade.append(min(100, sum(percent_in_trade[-open_trades_count:])))
+        # Track the number of trades happening at once
+        trades_happening_at_once.append(open_trades_count)
 
-    # Track portfolio value over time
+        # Track total percent of portfolio in active trades
+        if open_trades_count > 0:
+            total_percent_in_trade.append(min(100, sum(percent_in_trade[-open_trades_count:])))
+
+# After iterating through all dataframes, update portfolio values at each timestamp
+for timestamp in common_index:
     portfolio_values.append(current_capital)
 
 # Calculate average trade duration
@@ -154,7 +169,7 @@ low_total_percent_in_trade = np.min(total_percent_in_trade) if total_percent_in_
 high_total_percent_in_trade = np.max(total_percent_in_trade) if total_percent_in_trade else 0
 
 # Calculate buy and hold strategy for gold
-buy_and_hold_value = df['Close'] / df['Close'].iloc[0] * initial_capital
+buy_and_hold_value = {asset: df['Close'] / df['Close'].iloc[0] * capital_per_asset for asset, df in dfs.items()}
 
 # Print summary results
 print("\nSummary Results:")
@@ -196,9 +211,10 @@ trades_df = pd.DataFrame(trades)
 
 # Plotting the data
 plt.figure(figsize=(14, 7))
-plt.plot(df['Close'], label='Close Price', alpha=0.5)
-plt.plot(df['EMA_Short'], label=f'EMA {ema_short_length}', alpha=0.75)
-plt.plot(df['EMA_Long'], label=f'EMA {ema_long_length}', alpha=0.75)
+for asset, df in dfs.items():
+    plt.plot(df['Close'], label=f'Close Price ({asset})', alpha=0.5)
+    plt.plot(df['EMA_Short'], label=f'EMA {ema_short_length} ({asset})', alpha=0.75)
+    plt.plot(df['EMA_Long'], label=f'EMA {ema_long_length} ({asset})', alpha=0.75)
 
 # Mark trades on the plot
 for trade in trades:
@@ -207,7 +223,7 @@ for trade in trades:
         plt.plot(trade['entry_time'], trade['entry_price'], marker='o', color='b', markersize=8, alpha=0.75)
         plt.plot(trade['exit_time'], trade['exit_price'], marker='x', color=color, markersize=8, alpha=0.75)
 
-plt.title('Gold Futures Trading Strategy')
+plt.title('Trading Strategy for All Assets')
 plt.xlabel('Time')
 plt.ylabel('Price')
 plt.legend()
@@ -217,10 +233,11 @@ plt.close()
 
 # Plot portfolio value, buy-and-hold strategy, and S&P 500 value
 plt.figure(figsize=(14, 7))
-plt.plot(df.index, portfolio_values, label='Portfolio Value', alpha=0.75)
-plt.plot(df.index, buy_and_hold_value, label='Buy & Hold Gold Value', alpha=0.75, linestyle='--')
+plt.plot(common_index, portfolio_values, label='Portfolio Value', alpha=0.75)
+for asset in assets:
+    plt.plot(dfs[asset].index, buy_and_hold_value[asset], label=f'Buy & Hold {asset} Value', alpha=0.75, linestyle='--')
 plt.plot(sp500_df.index, sp500_df['Close'] / sp500_df['Close'].iloc[0] * initial_capital, label='S&P 500 Value', alpha=0.75)
-plt.title('Portfolio Value vs. Buy & Hold Gold and S&P 500')
+plt.title('Portfolio Value vs. Buy & Hold Strategies and S&P 500')
 plt.xlabel('Time')
 plt.ylabel('Value')
 plt.legend()
